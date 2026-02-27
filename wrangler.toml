@@ -1,0 +1,12 @@
+name = "atxp2"
+main = "src/index.ts"
+compatibility_date = "2025-01-01"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "atxp2"
+database_id = "REPLACE_WITH_D1_DATABASE_ID"
+migrations_dir = "migrations"
+
+[vars]
+# API_KEY 和 ADMIN_KEY 通过 wrangler secret 设置，不写在这里
