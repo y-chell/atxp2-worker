@@ -810,7 +810,7 @@ textarea:focus{outline:none;border-color:#1a1a2e}
   </div>
 
   <div class="card">
-    <div class="card-header">账号列表 <button class="btn btn-primary btn-sm" onclick="loadAccounts()">刷新</button></div>
+    <div class="card-header">账号列表</div>
     <div class="card-body" style="padding:0">
       <table><thead><tr><th>邮箱</th><th>状态</th><th>错误次数</th><th>最近错误</th><th>操作</th></tr></thead>
       <tbody id="acc-table"><tr><td colspan="5" style="text-align:center;color:#aaa;padding:20px">加载中...</td></tr></tbody>
@@ -851,11 +851,13 @@ async function loadAccounts(){
   try{
     const r=await fetch('/admin/accounts',{headers:H});const list=await r.json();
     const tb=document.getElementById('acc-table');
-    if(!list.length){tb.innerHTML='<tr><td colspan="5" style="text-align:center;color:#aaa;padding:20px">暂无账号</td></tr>';return;}
+    if(!Array.isArray(list)||!list.length){tb.innerHTML='<tr><td colspan="5" style="text-align:center;color:#aaa;padding:20px">暂无账号</td></tr>';return;}
+    const esc=s=>String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
     tb.innerHTML=list.map(a=>{
       const ok=a.error_count<5;
       const tag=a.error_count===0?'<span class="tag ok">正常</span>':ok?'<span class="tag warn">警告</span>':'<span class="tag err">异常</span>';
-      return \`<tr><td>\${a.email}</td><td>\${tag}</td><td>\${a.error_count}</td><td style="color:#aaa;font-size:12px">\${a.last_error||'-'}</td><td><button class="btn btn-danger btn-sm" onclick="delAccount('\${a.email}')">删除</button></td></tr>\`;
+      const err=esc((a.last_error||'').slice(0,60))||'-';
+      return \`<tr><td>\${esc(a.email)}</td><td>\${tag}</td><td>\${a.error_count}</td><td style="color:#aaa;font-size:12px">\${err}</td><td><button class="btn btn-danger btn-sm" onclick="delAccount('\${esc(a.email)}')">删除</button></td></tr>\`;
     }).join('');
   }catch(e){console.error(e)}
 }
