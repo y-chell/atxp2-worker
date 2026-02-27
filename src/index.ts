@@ -56,6 +56,9 @@ async function releaseAccount(db: D1Database, acc: Account, error = '') {
   }
 }
 
+// Thrown when upstream WAF/CDN blocks the request (not an account fault)
+class WafBlockError extends Error {}
+
 async function ensureToken(db: D1Database, acc: Account): Promise<string> {
   const now = Math.floor(Date.now() / 1000);
   if (acc.access_token && now < acc.token_expires) return acc.access_token;
@@ -74,6 +77,8 @@ async function ensureToken(db: D1Database, acc: Account): Promise<string> {
 
   if (!resp.ok) {
     const text = await resp.text();
+    // HTML response = WAF/CDN block, not an account issue
+    if (text.trimStart().startsWith('<')) throw new WafBlockError(`upstream blocked [${resp.status}]`);
     throw new Error(`刷新失败 [${resp.status}]: ${text.slice(0, 200)}`);
   }
 
@@ -217,6 +222,10 @@ app.post('/v1/chat/completions', async (c) => {
   try {
     token = await ensureToken(c.env.DB, acc);
   } catch (e) {
+    if (e instanceof WafBlockError) {
+      await releaseAccount(c.env.DB, acc);
+      return c.json({ error: { message: 'Upstream temporarily blocked, retry later', type: 'overloaded_error' } }, 503);
+    }
     await releaseAccount(c.env.DB, acc, String(e));
     return c.json({ error: { message: `Token error: ${e}` } }, 502);
   }
@@ -535,6 +544,10 @@ app.post('/v1/messages', async (c) => {
   try {
     token = await ensureToken(c.env.DB, acc);
   } catch (e) {
+    if (e instanceof WafBlockError) {
+      await releaseAccount(c.env.DB, acc);
+      return c.json({ type: 'error', error: { type: 'overloaded_error', message: 'Upstream temporarily blocked, retry later' } }, 503);
+    }
     await releaseAccount(c.env.DB, acc, String(e));
     return c.json({ type: 'error', error: { type: 'api_error', message: `Token error: ${e}` } }, 502);
   }
