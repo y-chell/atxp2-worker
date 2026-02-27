@@ -503,4 +503,150 @@ app.delete('/admin/accounts/:email', async (c) => {
   return c.json({ ok: true });
 });
 
+// ── Admin UI ─────────────────────────────────────────────────
+app.get('/', (c) => {
+  const html = `<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>ATXP2 管理</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#f5f5f5;color:#333}
+.header{background:#1a1a2e;color:#fff;padding:16px 24px;display:flex;align-items:center;gap:12px}
+.header h1{font-size:18px;font-weight:600}
+.badge{background:#e94560;padding:2px 8px;border-radius:10px;font-size:12px}
+.main{max-width:900px;margin:24px auto;padding:0 16px;display:flex;flex-direction:column;gap:20px}
+.card{background:#fff;border-radius:8px;box-shadow:0 1px 3px rgba(0,0,0,.1);overflow:hidden}
+.card-header{padding:14px 20px;border-bottom:1px solid #eee;font-weight:600;font-size:14px;display:flex;justify-content:space-between;align-items:center}
+.card-body{padding:20px}
+.stats{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}
+.stat{text-align:center;padding:16px;background:#f9f9f9;border-radius:6px}
+.stat-num{font-size:28px;font-weight:700;color:#1a1a2e}
+.stat-label{font-size:12px;color:#888;margin-top:4px}
+.stat-num.ok{color:#16a34a}
+.stat-num.err{color:#dc2626}
+table{width:100%;border-collapse:collapse;font-size:13px}
+th{background:#f9f9f9;padding:10px 12px;text-align:left;font-weight:600;color:#555;border-bottom:2px solid #eee}
+td{padding:10px 12px;border-bottom:1px solid #f0f0f0}
+tr:last-child td{border-bottom:none}
+tr:hover td{background:#fafafa}
+.tag{display:inline-block;padding:2px 8px;border-radius:10px;font-size:11px;font-weight:500}
+.tag.ok{background:#dcfce7;color:#16a34a}
+.tag.err{background:#fee2e2;color:#dc2626}
+.tag.warn{background:#fef9c3;color:#ca8a04}
+.btn{padding:6px 14px;border:none;border-radius:5px;cursor:pointer;font-size:13px;font-weight:500}
+.btn-primary{background:#1a1a2e;color:#fff}
+.btn-primary:hover{background:#16213e}
+.btn-danger{background:#fee2e2;color:#dc2626}
+.btn-danger:hover{background:#fecaca}
+.btn-sm{padding:4px 10px;font-size:12px}
+textarea{width:100%;border:1px solid #ddd;border-radius:5px;padding:10px;font-size:13px;font-family:monospace;resize:vertical;min-height:120px}
+textarea:focus{outline:none;border-color:#1a1a2e}
+.msg{padding:10px 14px;border-radius:5px;font-size:13px;margin-top:12px;display:none}
+.msg.ok{background:#dcfce7;color:#16a34a}
+.msg.err{background:#fee2e2;color:#dc2626}
+.input-row{display:flex;gap:8px;margin-top:8px}
+.input-row input{flex:1;border:1px solid #ddd;border-radius:5px;padding:8px 10px;font-size:13px}
+.input-row input:focus{outline:none;border-color:#1a1a2e}
+</style>
+</head>
+<body>
+<div class="header">
+  <h1>⚡ ATXP2 Worker</h1>
+  <span class="badge" id="avail-badge">加载中...</span>
+</div>
+<div class="main">
+  <div class="card">
+    <div class="card-header">账号池状态 <button class="btn btn-primary btn-sm" onclick="loadStatus()">刷新</button></div>
+    <div class="card-body">
+      <div class="stats">
+        <div class="stat"><div class="stat-num" id="s-total">-</div><div class="stat-label">总账号</div></div>
+        <div class="stat"><div class="stat-num ok" id="s-avail">-</div><div class="stat-label">可用</div></div>
+        <div class="stat"><div class="stat-num err" id="s-err">-</div><div class="stat-label">异常</div></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-header">账号列表</div>
+    <div class="card-body" style="padding:0">
+      <table><thead><tr><th>邮箱</th><th>状态</th><th>错误次数</th><th>最近错误</th><th>操作</th></tr></thead>
+      <tbody id="acc-table"><tr><td colspan="5" style="text-align:center;color:#aaa;padding:20px">加载中...</td></tr></tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-header">导入账号</div>
+    <div class="card-body">
+      <div style="font-size:13px;color:#666;margin-bottom:8px">粘贴 JSON 数组，格式：<code>[{"email":"...","refresh_token":"..."}]</code></div>
+      <textarea id="import-json" placeholder='[{"email":"user@example.com","refresh_token":"xxx"}]'></textarea>
+      <div style="margin-top:10px;display:flex;gap:8px">
+        <button class="btn btn-primary" onclick="importAccounts()">导入</button>
+        <button class="btn btn-primary" onclick="document.getElementById('import-json').value=''">清空</button>
+      </div>
+      <div class="msg" id="import-msg"></div>
+    </div>
+  </div>
+</div>
+
+<script>
+const ADMIN_KEY = localStorage.getItem('admin_key') || prompt('请输入 ADMIN_KEY：') || '';
+localStorage.setItem('admin_key', ADMIN_KEY);
+const H = {'Content-Type':'application/json','Authorization':'Bearer '+ADMIN_KEY};
+
+async function loadStatus(){
+  try{
+    const r=await fetch('/status');const d=await r.json();
+    document.getElementById('s-total').textContent=d.total;
+    document.getElementById('s-avail').textContent=d.available;
+    document.getElementById('s-err').textContent=d.total-d.available;
+    document.getElementById('avail-badge').textContent=d.available+'/'+d.total+' 可用';
+  }catch(e){console.error(e)}
+}
+
+async function loadAccounts(){
+  try{
+    const r=await fetch('/admin/accounts',{headers:H});const list=await r.json();
+    const tb=document.getElementById('acc-table');
+    if(!list.length){tb.innerHTML='<tr><td colspan="5" style="text-align:center;color:#aaa;padding:20px">暂无账号</td></tr>';return;}
+    tb.innerHTML=list.map(a=>{
+      const ok=a.error_count<5;
+      const tag=a.error_count===0?'<span class="tag ok">正常</span>':ok?'<span class="tag warn">警告</span>':'<span class="tag err">异常</span>';
+      return \`<tr><td>\${a.email}</td><td>\${tag}</td><td>\${a.error_count}</td><td style="color:#aaa;font-size:12px">\${a.last_error||'-'}</td><td><button class="btn btn-danger btn-sm" onclick="delAccount('\${a.email}')">删除</button></td></tr>\`;
+    }).join('');
+  }catch(e){console.error(e)}
+}
+
+async function delAccount(email){
+  if(!confirm('确认删除 '+email+' ?'))return;
+  await fetch('/admin/accounts/'+encodeURIComponent(email),{method:'DELETE',headers:H});
+  loadAccounts();loadStatus();
+}
+
+async function importAccounts(){
+  const msg=document.getElementById('import-msg');
+  try{
+    const list=JSON.parse(document.getElementById('import-json').value);
+    const r=await fetch('/admin/import',{method:'POST',headers:H,body:JSON.stringify(list)});
+    const d=await r.json();
+    msg.className='msg ok';msg.style.display='block';
+    msg.textContent='成功导入 '+d.imported+' 个账号';
+    loadAccounts();loadStatus();
+  }catch(e){
+    msg.className='msg err';msg.style.display='block';
+    msg.textContent='导入失败：'+e.message;
+  }
+}
+
+loadStatus();loadAccounts();
+setInterval(loadStatus,30000);
+</script>
+</body>
+</html>`;
+  return c.html(html);
+});
+
 export default app;
