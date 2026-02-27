@@ -503,6 +503,233 @@ app.delete('/admin/accounts/:email', async (c) => {
   return c.json({ ok: true });
 });
 
+// ── POST /v1/messages (Anthropic API) ───────────────────────
+function anthropicEvent(event: string, data: unknown): string {
+  return `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
+}
+
+app.post('/v1/messages', async (c) => {
+  let body: { messages?: unknown[]; model?: string; system?: string; max_tokens?: number; stream?: boolean };
+  try {
+    body = await c.req.json();
+  } catch {
+    return c.json({ type: 'error', error: { type: 'invalid_request_error', message: 'Invalid JSON body' } }, 400);
+  }
+
+  const messages = (body.messages ?? []) as Array<{ role: string; content: unknown }>;
+  const model = body.model ?? 'anthropic/claude-sonnet-4-6';
+  const stream = body.stream ?? false;
+  const lcModel = modelMap(model);
+
+  // Prepend system as a fake system message for messagesToText
+  const allMessages = body.system
+    ? [{ role: 'system', content: body.system }, ...messages]
+    : messages;
+  const text = messagesToText(allMessages);
+  if (!text) return c.json({ type: 'error', error: { type: 'invalid_request_error', message: 'No messages' } }, 400);
+
+  const acc = await acquireAccount(c.env.DB);
+  if (!acc) return c.json({ type: 'error', error: { type: 'overloaded_error', message: 'No available accounts' } }, 503);
+
+  let token: string;
+  try {
+    token = await ensureToken(c.env.DB, acc);
+  } catch (e) {
+    await releaseAccount(c.env.DB, acc, String(e));
+    return c.json({ type: 'error', error: { type: 'api_error', message: `Token error: ${e}` } }, 502);
+  }
+
+  const headers: Record<string, string> = {
+    Authorization: `Bearer ${token}`,
+    'Content-Type': 'application/json',
+    Accept: 'application/json, text/plain, */*',
+    Origin: BASE_URL,
+    Referer: `${BASE_URL}/c/new`,
+    'User-Agent': UA,
+  };
+
+  const payload = {
+    text,
+    sender: 'User',
+    clientTimestamp: new Date().toISOString().slice(0, 19),
+    isCreatedByUser: true,
+    parentMessageId: '00000000-0000-0000-0000-000000000000',
+    messageId: crypto.randomUUID(),
+    error: false,
+    endpoint: 'ATXP',
+    endpointType: 'custom',
+    model: lcModel,
+    modelLabel: null,
+    spec: lcModel,
+    key: 'never',
+    isTemporary: true,
+    isRegenerate: false,
+    isContinued: false,
+    conversationId: null,
+    ephemeralAgent: { mcp: ['sys__clear__sys'], web_search: false, file_search: false, execute_code: false, artifacts: false },
+  };
+
+  let convId = '';
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const initResp = await fetch(`${BASE_URL}/api/agents/chat/ATXP`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(payload),
+    });
+
+    if (initResp.status === 429) {
+      if (attempt < 2) {
+        await new Promise((r) => setTimeout(r, 2 ** attempt * 1000));
+        continue;
+      }
+      await releaseAccount(c.env.DB, acc, 'concurrent_limit');
+      return c.json({ type: 'error', error: { type: 'overloaded_error', message: 'Server busy, please retry later' } }, 429);
+    }
+
+    if (!initResp.ok) {
+      const err = await initResp.text();
+      await releaseAccount(c.env.DB, acc, err.slice(0, 200));
+      return c.json({ type: 'error', error: { type: 'api_error', message: `Chat init failed [${initResp.status}]: ${err.slice(0, 200)}` } }, 502);
+    }
+
+    const ct = initResp.headers.get('content-type') ?? '';
+    if (ct.includes('application/json')) {
+      const initData = (await initResp.json()) as { conversationId?: string };
+      convId = initData.conversationId ?? '';
+      if (!convId) {
+        await releaseAccount(c.env.DB, acc, 'No conversationId');
+        return c.json({ type: 'error', error: { type: 'api_error', message: 'No conversationId in response' } }, 502);
+      }
+      break;
+    }
+
+    const sseText = await initResp.text();
+    for (const line of sseText.split('\n')) {
+      const l = line.trim();
+      if (!l.startsWith('data:')) continue;
+      try {
+        const d = JSON.parse(l.slice(5).trim()) as { text?: string; error?: boolean };
+        if (d.text === 'Invalid model spec') {
+          await releaseAccount(c.env.DB, acc);
+          return c.json({ type: 'error', error: { type: 'invalid_request_error', message: `Model '${model}' is not available` } }, 400);
+        }
+        if (d.error) {
+          await releaseAccount(c.env.DB, acc, d.text ?? 'upstream error');
+          return c.json({ type: 'error', error: { type: 'api_error', message: `Upstream error: ${d.text}` } }, 502);
+        }
+      } catch { /* ignore */ }
+    }
+    await releaseAccount(c.env.DB, acc, `unexpected SSE: ${sseText.slice(0, 100)}`);
+    return c.json({ type: 'error', error: { type: 'api_error', message: 'Unexpected response format' } }, 502);
+  }
+
+  if (!convId) {
+    await releaseAccount(c.env.DB, acc, 'max retries');
+    return c.json({ type: 'error', error: { type: 'api_error', message: 'Max retries exceeded' } }, 502);
+  }
+
+  const streamHeaders: Record<string, string> = { ...headers };
+  delete streamHeaders['Content-Type'];
+
+  const streamResp = await fetch(`${BASE_URL}/api/agents/chat/stream/${convId}`, { headers: streamHeaders });
+  if (!streamResp.ok) {
+    const err = await streamResp.text();
+    await releaseAccount(c.env.DB, acc, `stream ${streamResp.status}`);
+    return c.json({ type: 'error', error: { type: 'api_error', message: `Stream failed: ${err.slice(0, 200)}` } }, 502);
+  }
+
+  const msgId = `msg_${crypto.randomUUID().replace(/-/g, '').slice(0, 24)}`;
+
+  if (!stream) {
+    const raw = await streamResp.text();
+    let fullContent = '';
+    for (const line of raw.split('\n')) {
+      const l = line.trim();
+      if (!l.startsWith('data:')) continue;
+      const ds = l.slice(5).trim();
+      if (ds === '[DONE]') continue;
+      try { fullContent += extractDeltaText(JSON.parse(ds)); } catch { /* ignore */ }
+    }
+    await releaseAccount(c.env.DB, acc);
+    return c.json({
+      id: msgId,
+      type: 'message',
+      role: 'assistant',
+      model,
+      content: [{ type: 'text', text: fullContent }],
+      stop_reason: 'end_turn',
+      stop_sequence: null,
+      usage: { input_tokens: 0, output_tokens: 0 },
+    });
+  }
+
+  // Stream mode: pipe LibreChat SSE → Anthropic SSE
+  const encoder = new TextEncoder();
+  const { readable, writable } = new TransformStream<Uint8Array, Uint8Array>();
+  const writer = writable.getWriter();
+
+  c.executionCtx.waitUntil(
+    (async () => {
+      try {
+        await writer.write(encoder.encode(anthropicEvent('message_start', {
+          type: 'message_start',
+          message: { id: msgId, type: 'message', role: 'assistant', model, content: [], stop_reason: null, stop_sequence: null, usage: { input_tokens: 0, output_tokens: 0 } },
+        })));
+        await writer.write(encoder.encode(anthropicEvent('content_block_start', { type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } })));
+        await writer.write(encoder.encode(anthropicEvent('ping', { type: 'ping' })));
+
+        const reader = streamResp.body!.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '';
+
+        for (;;) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+
+          while (buffer.includes('\n\n')) {
+            const idx = buffer.indexOf('\n\n');
+            const block = buffer.slice(0, idx);
+            buffer = buffer.slice(idx + 2);
+
+            for (const line of block.split('\n')) {
+              const l = line.trim();
+              if (!l.startsWith('data:')) continue;
+              const ds = l.slice(5).trim();
+              if (ds === '[DONE]') {
+                await writer.write(encoder.encode(anthropicEvent('content_block_stop', { type: 'content_block_stop', index: 0 })));
+                await writer.write(encoder.encode(anthropicEvent('message_delta', { type: 'message_delta', delta: { stop_reason: 'end_turn', stop_sequence: null }, usage: { output_tokens: 0 } })));
+                await writer.write(encoder.encode(anthropicEvent('message_stop', { type: 'message_stop' })));
+                await releaseAccount(c.env.DB, acc);
+                writer.close();
+                return;
+              }
+              try {
+                const t = extractDeltaText(JSON.parse(ds));
+                if (t) await writer.write(encoder.encode(anthropicEvent('content_block_delta', { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: t } })));
+              } catch { /* ignore */ }
+            }
+          }
+        }
+
+        // Stream ended without [DONE]
+        await writer.write(encoder.encode(anthropicEvent('content_block_stop', { type: 'content_block_stop', index: 0 })));
+        await writer.write(encoder.encode(anthropicEvent('message_delta', { type: 'message_delta', delta: { stop_reason: 'end_turn', stop_sequence: null }, usage: { output_tokens: 0 } })));
+        await writer.write(encoder.encode(anthropicEvent('message_stop', { type: 'message_stop' })));
+        await releaseAccount(c.env.DB, acc);
+      } catch (e) {
+        await releaseAccount(c.env.DB, acc, String(e));
+      } finally {
+        writer.close().catch(() => { /* already closed */ });
+      }
+    })(),
+  );
+
+  return new Response(readable, {
+    headers: { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache' },
+  });
+});
+
 // ── Admin UI ─────────────────────────────────────────────────
 app.get('/', (c) => {
   const html = `<!DOCTYPE html>

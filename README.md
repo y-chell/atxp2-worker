@@ -91,6 +91,7 @@ Base URL：`https://atxp2.your-subdomain.workers.dev`
 | 端点 | 说明 |
 |------|------|
 | `POST /v1/chat/completions` | 对话（兼容 OpenAI 格式，支持 stream） |
+| `POST /v1/messages` | 对话（兼容 Anthropic 格式，支持 stream） |
 | `GET /v1/models` | 获取可用模型列表 |
 | `GET /status` | 账号池状态 |
 | `GET /admin/accounts` | 查看账号列表 |
