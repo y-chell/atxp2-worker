@@ -19,6 +19,7 @@ interface Account {
 
 const BASE_URL = 'https://chat.atxp.ai';
 const TOKEN_TTL = 840; // 15min - 60s buffer
+const REFRESH_AHEAD = 120; // 提前 2 分钟刷新
 const ERROR_RESET_AFTER = 300; // 5min auto-recovery
 const UA =
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 ' +
@@ -891,4 +892,64 @@ setInterval(loadStatus,30000);
   return c.html(html);
 });
 
-export default app;
+// ── Cron: scheduled token refresh ────────────────────────────
+async function scheduledRefresh(db: D1Database): Promise<void> {
+  const now = Math.floor(Date.now() / 1000);
+  const { results } = await db
+    .prepare('SELECT * FROM accounts WHERE error_count < 5 AND (token_expires - ? <= ?)')
+    .bind(now, REFRESH_AHEAD)
+    .all<Account>();
+
+  console.log(`[cron] ${results.length} accounts need refresh`);
+
+  for (const acc of results) {
+    try {
+      const resp = await fetch(`${BASE_URL}/api/auth/refresh`, {
+        method: 'POST',
+        headers: {
+          Cookie: `refreshToken=${acc.refresh_token}`,
+          'Content-Type': 'application/json',
+          'User-Agent': UA,
+          Origin: BASE_URL,
+          Referer: `${BASE_URL}/`,
+        },
+        body: '{}',
+      });
+
+      if (!resp.ok) {
+        const text = await resp.text();
+        console.error(`[cron] ${acc.email} refresh failed [${resp.status}]: ${text.slice(0, 100)}`);
+        continue;
+      }
+
+      const data = (await resp.json()) as { token?: string };
+      if (!data.token) {
+        console.error(`[cron] ${acc.email} no token in response`);
+        continue;
+      }
+
+      let newRt = acc.refresh_token;
+      const setCookie = resp.headers.get('Set-Cookie') ?? '';
+      const rtMatch = setCookie.match(/refreshToken=([^;]+)/);
+      if (rtMatch && rtMatch[1] !== acc.refresh_token) newRt = rtMatch[1];
+
+      await db
+        .prepare("UPDATE accounts SET access_token = ?, token_expires = ?, refresh_token = ?, error_count = 0, last_error = '' WHERE id = ?")
+        .bind(data.token, now + TOKEN_TTL, newRt, acc.id)
+        .run();
+
+      console.log(`[cron] ${acc.email} OK`);
+    } catch (e) {
+      console.error(`[cron] ${acc.email} error: ${e}`);
+    }
+  }
+}
+
+export default {
+  fetch(request: Request, env: Env, ctx: ExecutionContext) {
+    return app.fetch(request, env, ctx);
+  },
+  async scheduled(_event: ScheduledEvent, env: Env, ctx: ExecutionContext) {
+    ctx.waitUntil(scheduledRefresh(env.DB));
+  },
+};

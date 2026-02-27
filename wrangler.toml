@@ -8,5 +8,8 @@ database_name = "atxp2"
 database_id = "6ba05a1f-7803-4f55-bedf-f79ab47c85ad"
 migrations_dir = "migrations"
 
+[triggers]
+crons = ["*/10 * * * *"]
+
 [vars]
 # API_KEY 和 ADMIN_KEY 通过 wrangler secret 设置，不写在这里
