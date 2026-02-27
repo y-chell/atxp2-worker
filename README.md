@@ -22,7 +22,13 @@ cd atxp2-worker
 npm install
 ```
 
-**2. 创建 D1 数据库**
+**2. 登录 Cloudflare**
+
+```bash
+npx wrangler login
+```
+
+**3. 创建 D1 数据库**
 
 ```bash
 npx wrangler d1 create atxp2
@@ -37,20 +43,20 @@ database_name = "atxp2"
 database_id = "你的-database-id"
 ```
 
-**3. 初始化表结构**
+**4. 初始化表结构**
 
 ```bash
 npx wrangler d1 migrations apply atxp2 --remote
 ```
 
-**4. 设置 Secrets**
+**5. 设置 Secrets**
 
 ```bash
 npx wrangler secret put API_KEY    # 客户端鉴权用，留空则无需认证
 npx wrangler secret put ADMIN_KEY  # 管理接口鉴权用
 ```
 
-**5. 部署**
+**6. 部署**
 
 ```bash
 npx wrangler deploy
@@ -58,22 +64,24 @@ npx wrangler deploy
 
 ### 自动部署（GitHub Actions）
 
-在 GitHub 仓库 Settings → Secrets → Actions 中添加：
+在 GitHub 仓库 Settings → Secrets and variables → Actions 中添加以下两个 Secret：
 
 - `CLOUDFLARE_API_TOKEN`：在 [CF Dashboard](https://dash.cloudflare.com/profile/api-tokens) 用 **Edit Cloudflare Workers** 模板创建
+- `CLOUDFLARE_ACCOUNT_ID`：在 [CF Dashboard](https://dash.cloudflare.com/) 右侧边栏或 Workers 页面可找到 Account ID
 
 之后 push 到 `main` 分支自动触发部署。
 
 ## 导入账号
 
-账号需通过本地 [register.py](https://github.com/bwwq/atxp2) 注册后导入，或手动添加。
+账号需通过本地 [register.py](https://github.com/bwwq/atxp2) 注册后导入。注册完成后，打开 Worker 根路径的管理界面（`https://your-worker.workers.dev/`），在「导入账号」中粘贴 JSON 批量导入。
+
+也可通过 API 导入：
 
 ```bash
-# 批量导入
-python import_accounts.py \
-  --url https://atxp2.your-subdomain.workers.dev \
-  --admin-key YOUR_ADMIN_KEY \
-  --file accounts.json
+curl -X POST https://your-worker.workers.dev/admin/import \
+  -H "Authorization: Bearer YOUR_ADMIN_KEY" \
+  -H "Content-Type: application/json" \
+  -d '[{"email":"user@example.com","refresh_token":"xxx"}]'
 ```
 
 `accounts.json` 格式：
