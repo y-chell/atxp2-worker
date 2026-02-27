@@ -799,7 +799,7 @@ textarea:focus{outline:none;border-color:#1a1a2e}
 </div>
 <div class="main">
   <div class="card">
-    <div class="card-header">账号池状态 <button class="btn btn-primary btn-sm" onclick="loadStatus()">刷新</button></div>
+    <div class="card-header">账号池状态 <button class="btn btn-primary btn-sm" onclick="loadStatus();loadAccounts()">刷新</button></div>
     <div class="card-body">
       <div class="stats">
         <div class="stat"><div class="stat-num" id="s-total">-</div><div class="stat-label">总账号</div></div>
@@ -810,7 +810,7 @@ textarea:focus{outline:none;border-color:#1a1a2e}
   </div>
 
   <div class="card">
-    <div class="card-header">账号列表</div>
+    <div class="card-header">账号列表 <button class="btn btn-primary btn-sm" onclick="loadAccounts()">刷新</button></div>
     <div class="card-body" style="padding:0">
       <table><thead><tr><th>邮箱</th><th>状态</th><th>错误次数</th><th>最近错误</th><th>操作</th></tr></thead>
       <tbody id="acc-table"><tr><td colspan="5" style="text-align:center;color:#aaa;padding:20px">加载中...</td></tr></tbody>
