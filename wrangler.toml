@@ -5,7 +5,7 @@ compatibility_date = "2025-01-01"
 [[d1_databases]]
 binding = "DB"
 database_name = "atxp2"
-database_id = "REPLACE_WITH_D1_DATABASE_ID"
+database_id = "6ba05a1f-7803-4f55-bedf-f79ab47c85ad"
 migrations_dir = "migrations"
 
 [vars]
