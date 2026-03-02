@@ -893,6 +893,61 @@ setInterval(loadStatus,30000);
   return c.html(html);
 });
 
+// ── Debug: raw ATXP stream ────────────────────────────────────
+app.get('/debug/raw', async (c) => {
+  const acc = await acquireAccount(c.env.DB);
+  if (!acc) return c.json({ error: 'no accounts' }, 503);
+  let token: string;
+  try { token = await ensureToken(c.env.DB, acc); }
+  catch (e) { return c.json({ error: String(e) }, 502); }
+
+  const headers: Record<string, string> = {
+    Authorization: `Bearer ${token}`, 'Content-Type': 'application/json',
+    Accept: 'application/json, text/plain, */*',
+    Origin: BASE_URL, Referer: `${BASE_URL}/c/new`, 'User-Agent': UA,
+  };
+  const payload = {
+    text: 'say: hello', sender: 'User',
+    clientTimestamp: new Date().toISOString().slice(0, 19),
+    isCreatedByUser: true,
+    parentMessageId: '00000000-0000-0000-0000-000000000000',
+    messageId: crypto.randomUUID(), error: false,
+    endpoint: 'ATXP', endpointType: 'custom',
+    model: 'anthropic/claude-haiku-4-5', modelLabel: null,
+    spec: 'anthropic/claude-haiku-4-5', key: 'never',
+    isTemporary: true, isRegenerate: false, isContinued: false,
+    conversationId: null,
+    ephemeralAgent: { mcp: ['sys__clear__sys'], web_search: false, file_search: false, execute_code: false, artifacts: false },
+  };
+
+  const initResp = await fetch(`${BASE_URL}/api/agents/chat/ATXP`, {
+    method: 'POST', headers, body: JSON.stringify(payload),
+  });
+  if (!initResp.ok) return c.text(`init failed ${initResp.status}: ${await initResp.text()}`);
+  const ct = initResp.headers.get('content-type') ?? '';
+  if (!ct.includes('application/json')) return c.text(`unexpected init ct: ${ct}\n${await initResp.text()}`);
+
+  const { conversationId } = (await initResp.json()) as { conversationId?: string };
+  if (!conversationId) return c.text('no conversationId');
+
+  const streamHeaders = { ...headers };
+  delete streamHeaders['Content-Type'];
+  const streamResp = await fetch(`${BASE_URL}/api/agents/chat/stream/${conversationId}`, { headers: streamHeaders });
+  if (!streamResp.ok) return c.text(`stream failed ${streamResp.status}`);
+
+  // 返回前 3000 字节原始内容
+  const reader = streamResp.body!.getReader();
+  let raw = '';
+  while (raw.length < 3000) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    raw += new TextDecoder().decode(value);
+  }
+  reader.cancel();
+  await releaseAccount(c.env.DB, acc);
+  return c.text(raw);
+});
+
 // ── Cron: scheduled token refresh ────────────────────────────
 async function scheduledRefresh(db: D1Database): Promise<void> {
   const now = Math.floor(Date.now() / 1000);
