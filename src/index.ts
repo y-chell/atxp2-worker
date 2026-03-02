@@ -395,6 +395,7 @@ app.post('/v1/chat/completions', async (c) => {
               try {
                 const t = extractDeltaText(JSON.parse(ds));
                 if (t) await writer.write(encoder.encode(oaiChunk(chunkId, model, t, null)));
+                else console.log('[stream] no text from:', ds.slice(0, 120));
               } catch { /* ignore */ }
             }
           }
